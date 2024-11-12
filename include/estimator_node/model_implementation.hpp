@@ -33,7 +33,7 @@ struct SystemModel {
     return ans;
   }
 
-  StateVector xdot(StateVector x, InputVector u) const {
+  StateVector xdot(StateVector x, InputVector) const {
     StateVector ans;
     ans(States::Vx) = x(States::Ax) - x(States::Phidot) * x(States::Vy);
     ans(States::Vy) = x(States::Ay) + x(States::Phidot) * x(States::Vx);

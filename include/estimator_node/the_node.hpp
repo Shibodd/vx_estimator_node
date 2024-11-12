@@ -5,6 +5,8 @@
 #include <numbers>
 #include <functional>
 #include <queue>
+#include <optional>
+#include <iostream>
 
 #include <rclcpp/rclcpp.hpp>
 
@@ -16,6 +18,7 @@
 #include <kalman/solvers/euler.hpp>
 
 #include <estimator_node/model_implementation.hpp>
+
 
 using namespace std::chrono_literals;
 
@@ -32,24 +35,15 @@ struct MeasurementT {
   };
 };
 
-class EstimatorNode : public rclcpp::Node {
+class EstimatorNode {
   constexpr static int MAX_QUEUED_MEASUREMENTS = 10;
   std::priority_queue<MeasurementT, std::vector<MeasurementT>, MeasurementT::Newer> m_measurements;
-
-  std::chrono::nanoseconds now(){
-    return std::chrono::nanoseconds(rclcpp::Node::now().nanoseconds());
-  }
 
   void push_measurement(const MeasurementT& z) {
     if (m_measurements.size() > MAX_QUEUED_MEASUREMENTS)
       m_measurements.pop();
     m_measurements.push(z);
   }
-
-  rclcpp::Subscription<vesc_msgs::msg::VescImuStamped>::SharedPtr m_vesc_imu_sub;
-  rclcpp::Subscription<vesc_msgs::msg::VescStateStamped>::SharedPtr m_vesc_state_sub;
-  rclcpp::Publisher<geometry_msgs::msg::TwistWithCovarianceStamped>::SharedPtr m_pub;
-  rclcpp::TimerBase::SharedPtr m_timer;
 
   kalman::solvers::EulerSolver<model::impl::SystemModel> m_solver;
   model::impl::SystemModel m_sys_mdl;
@@ -63,19 +57,19 @@ class EstimatorNode : public rclcpp::Node {
   std::optional<std::chrono::nanoseconds> m_state_t;
   model::impl::SystemModel::SystemState m_state;
 
+  model::impl::SystemModel::SystemState m_initial_state;
+
 public:
-  EstimatorNode() : rclcpp::Node("estimator") {
-    m_vesc_imu_sub = this->create_subscription<vesc_msgs::msg::VescImuStamped>("/sensors/imu", 5, std::bind(&EstimatorNode::vesc_imu_cb, this, std::placeholders::_1));
-
-    m_vesc_state_sub = this->create_subscription<vesc_msgs::msg::VescStateStamped>("/sensors/core", 5, std::bind(&EstimatorNode::vesc_core_cb, this, std::placeholders::_1));
-    m_timer = this->create_wall_timer(0.05s, std::bind(&EstimatorNode::timer_cb, this));
-    m_pub = this->create_publisher<geometry_msgs::msg::TwistWithCovarianceStamped>("/ekf/twist", 5);
-
+  EstimatorNode(double qvx, double qvy, double qax, double qay, double qphidot, double qimuax, double qimuay)
+    : m_solver(0.05) {
     model::impl::SystemModel::StateVector Q;
-    Q(model::states::Vx) = Q(model::states::Vy) = 1;
-    Q(model::states::Ax) = Q(model::states::Ay) = 1;
-    Q(model::states::Phidot) = 1;
-    Q(model::states::ImuAxBias) = Q(model::states::ImuAyBias) = 1;
+    Q(model::states::Vx) = qvx;
+    Q(model::states::Vy) = qvy;
+    Q(model::states::Ax) = qax;
+    Q(model::states::Ay) = qay;
+    Q(model::states::Phidot) = qphidot;
+    Q(model::states::ImuAxBias) = qimuax;
+    Q(model::states::ImuAyBias) = qimuay;
     m_process_noise = Q.asDiagonal();
 
     model::impl::IMUMeasurementModel::MeasurementVector R_imu;
@@ -90,25 +84,20 @@ public:
 
     model::impl::SystemModel::StateVector P0(model::impl::SystemModel::StateVector::Constant(1e-9));
     P0(model::states::ImuAxBias) = P0(model::states::ImuAyBias) = 1;
-    m_state = kalman::make_system_state<model::impl::SystemModel>(
+
+    m_initial_state = kalman::make_system_state<model::impl::SystemModel>(
       model::impl::SystemModel::StateVector::Zero(),
       P0.asDiagonal()
     );
+    m_state = m_initial_state;
   }
 
-  void timer_cb() {
-    /*
-    if (!m_state_t.has_value()) {
-      if (m_measurements.size() <= 0) {
-        RCLCPP_INFO_THROTTLE(this->get_logger(), *(this->get_clock()), 5000, "Waiting for measurements");
-      } else {
-        m_state_t = now();
-      }
-      return;
-    }
+  void reset() {
+    m_state_t.reset();
+    m_state = m_initial_state;
+  }
 
-    //std::chrono::nanoseconds t = now();
-    */
+  std::optional<std::pair<std::chrono::nanoseconds, model::impl::SystemModel::SystemState>> get_state() {
     // Process all queued measurements
     while (m_measurements.size() > 0) {
       MeasurementT z = m_measurements.top();
@@ -117,25 +106,23 @@ public:
       if (!m_state_t.has_value())
         m_state_t = z.timestamp;
 
-      RCLCPP_INFO(this->get_logger(), "Zt = %ld\nSt = %ld\nT = %d", z.timestamp.count(), m_state_t->count(), 0);
-
       // Discard measurements older than the last estimate (too late - we don't support rolling back)
       if (z.timestamp < m_state_t) {
-        RCLCPP_WARN(this->get_logger(), "Measurement was late! Discarding");
+        // std::cout << "Measurement was late! Discarding" << std::endl;
         continue;
       }
-
-      /*
-      // Discard measurements newer than the current time (you're doing something wrong)
-      if (z.timestamp > t) {
-        RCLCPP_WARN(this->get_logger(), "Measurement is from the future! Discarding");
-        continue;
-      }
-      */
 
       // Predict until measurement timestamp
       double deltaT = std::chrono::duration<double>(z.timestamp - *m_state_t).count();
-      std::cout << "PREDICT " << deltaT << std::endl;
+
+      if (deltaT > 5.0) {
+        std::cout << "Tracking lost! Resetting" << std::endl;
+        reset();
+        m_state_t = z.timestamp;
+        deltaT = 0;
+      }
+
+      // std::cout << "PREDICT " << deltaT << std::endl;
       kalman::filters::ct_ekf_predict(deltaT, m_sys_mdl, {}, m_process_noise, m_solver, m_state);
       m_state_t = z.timestamp;
 
@@ -143,28 +130,10 @@ public:
       z.update(m_state);
     }
 
-  /*
-    // Predict until current time
-    double deltaT = std::chrono::duration<double>(t - *m_state_t).count();
-    std::cout << "PREDICT " << deltaT << std::endl;
-    kalman::filters::ct_ekf_predict(deltaT, m_vx_mdl, {}, m_process_noise, m_solver, m_state);
-    m_state_t = t;
-  */
-
     if (m_state_t.has_value()) {
-      geometry_msgs::msg::TwistWithCovarianceStamped msg;
-      msg.header.frame_id = "base_footprint";
-      msg.header.stamp = rclcpp::Time(m_state_t->count());
-      msg.twist.twist.linear.x = m_state(model::states::Vx);
-      msg.twist.twist.linear.y = m_state(model::states::Vy);
-      msg.twist.twist.linear.z = 0;
-      msg.twist.twist.angular.x = 0;
-      msg.twist.twist.angular.y = 0;
-      msg.twist.twist.angular.z = m_state(model::states::Phidot);
-      // TODO: msg.twist.twist.covariance
-      m_pub->publish(msg);
-
-      std::cerr << m_state << std::endl;
+      return { { *m_state_t, m_state } };
+    } else {
+      return std::nullopt;
     }
   }
 
@@ -172,7 +141,7 @@ public:
     Eigen::Vector<double, 1> z { msg->state.speed * 0.00012 };
     
     std::function fn = [z, &meas_mdl = m_erpm_mdl, &R = m_erpm_noise](model::impl::SystemModel::SystemState& state) {
-      std::cout << "CORE Update" << std::endl;
+      // std::cout << "CORE Update" << std::endl;
       kalman::filters::dt_ekf_update(meas_mdl, z, R, state);
     };
     push_measurement({ std::chrono::nanoseconds(rclcpp::Time(msg->header.stamp).nanoseconds()), fn });
@@ -180,10 +149,10 @@ public:
 
   void vesc_imu_cb(const vesc_msgs::msg::VescImuStamped::ConstSharedPtr& msg) {
     constexpr double THETA = 1.2819;
-    const Eigen::Matrix2d ROT(
-      std::cos(THETA), -std::sin(THETA),
-      std::sin(THETA), std::cos(THETA)
-    );
+    const Eigen::Matrix2d ROT {
+      { std::cos(THETA), -std::sin(THETA) },
+      { std::sin(THETA), std::cos(THETA) }
+    };
 
     Eigen::Vector2d z_acc(msg->imu.linear_acceleration.x, msg->imu.linear_acceleration.y);
     z_acc = ROT * 9.81 * z_acc;
@@ -194,7 +163,7 @@ public:
     z(model::imu_measurement::Phidot) = msg->imu.angular_velocity.z * (std::numbers::pi / 180.0);
 
     std::function fn = [z, &meas_mdl = m_imu_mdl, &R = m_imu_noise](model::impl::SystemModel::SystemState& state) {
-      std::cout << "IMU Update" << std::endl;
+      // std::cout << "IMU Update" << std::endl;
       kalman::filters::dt_ekf_update(meas_mdl, z, R, state);
     };
     push_measurement({ std::chrono::nanoseconds(rclcpp::Time(msg->header.stamp).nanoseconds()), fn });
