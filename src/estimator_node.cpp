@@ -7,9 +7,9 @@
 #include "rclcpp/serialization.hpp"
 #include "rosbag2_transport/reader_writer_factory.hpp"
 
-extern "C" int process(uint64_t* out_t, double* out_x, double qvx, double qvy, double qax, double qay, double qphidot, double qimuax, double qimuay)
+extern "C" int process(uint64_t* out_t, double* out_x, double qvx, double qax, double rvx, double rax)
 {
-  estimator_node::EstimatorNode node(qvx, qvy, qax, qay, qphidot, qimuax, qimuay);
+  estimator_node::EstimatorNode node(qvx, qax, rvx, rax);
 
   rosbag2_storage::StorageOptions storage_options;
   storage_options.uri = "/home/simonebondi/Downloads/rad/0_manuale_rad";

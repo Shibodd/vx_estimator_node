@@ -60,30 +60,22 @@ class EstimatorNode {
   model::impl::SystemModel::SystemState m_initial_state;
 
 public:
-  EstimatorNode(double qvx, double qvy, double qax, double qay, double qphidot, double qimuax, double qimuay)
+  EstimatorNode(double qvx, double qax, double rvx, double rax)
     : m_solver(0.05) {
     model::impl::SystemModel::StateVector Q;
     Q(model::states::Vx) = qvx;
-    Q(model::states::Vy) = qvy;
     Q(model::states::Ax) = qax;
-    Q(model::states::Ay) = qay;
-    Q(model::states::Phidot) = qphidot;
-    Q(model::states::ImuAxBias) = qimuax;
-    Q(model::states::ImuAyBias) = qimuay;
     m_process_noise = Q.asDiagonal();
 
     model::impl::IMUMeasurementModel::MeasurementVector R_imu;
-    R_imu(model::imu_measurement::Ax) = 0.5998;
-    R_imu(model::imu_measurement::Ay) = 0.7807;
-    R_imu(model::imu_measurement::Phidot) = 0.1411;
+    R_imu(model::imu_measurement::Ax) = rax;
     m_imu_noise = R_imu.asDiagonal();
 
     model::impl::ERPMMeasurementModel::MeasurementVector R_erpm;
-    R_erpm(model::erpm_measurement::ERPM) = 0.3652;
+    R_erpm(model::erpm_measurement::ERPM) = rvx;
     m_erpm_noise = R_erpm.asDiagonal();
 
     model::impl::SystemModel::StateVector P0(model::impl::SystemModel::StateVector::Constant(1e-9));
-    P0(model::states::ImuAxBias) = P0(model::states::ImuAyBias) = 1;
 
     m_initial_state = kalman::make_system_state<model::impl::SystemModel>(
       model::impl::SystemModel::StateVector::Zero(),
@@ -148,6 +140,7 @@ public:
   }
 
   void vesc_imu_cb(const vesc_msgs::msg::VescImuStamped::ConstSharedPtr& msg) {
+    /*
     constexpr double THETA = 1.2819;
     const Eigen::Matrix2d ROT {
       { std::cos(THETA), -std::sin(THETA) },
@@ -157,10 +150,9 @@ public:
     Eigen::Vector2d z_acc(msg->imu.linear_acceleration.x, msg->imu.linear_acceleration.y);
     z_acc = ROT * 9.81 * z_acc;
 
+    */
     Eigen::Vector<double, model::imu_measurement::Dimension> z;
-    z(model::imu_measurement::Ax) = z_acc.x();
-    z(model::imu_measurement::Ay) = z_acc.y();
-    z(model::imu_measurement::Phidot) = msg->imu.angular_velocity.z * (std::numbers::pi / 180.0);
+    z(model::imu_measurement::Ax) = -9.81 * msg->imu.linear_acceleration.y;
 
     std::function fn = [z, &meas_mdl = m_imu_mdl, &R = m_imu_noise](model::impl::SystemModel::SystemState& state) {
       // std::cout << "IMU Update" << std::endl;

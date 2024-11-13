@@ -21,23 +21,14 @@ struct SystemModel {
   using SystemJacobian = kalman::SystemJacobian<SystemModel>;
   using SystemCovariance = kalman::SystemCovariance<SystemModel>;
 
-  SystemJacobian xdot_jacobian(StateVector x, InputVector) const {
+  SystemJacobian xdot_jacobian(StateVector, InputVector) const {
     SystemJacobian ans(SystemJacobian::Zero());
     ans(States::Vx, States::Ax) = 1;
-    ans(States::Vx, States::Vy) = -x(States::Phidot);
-    ans(States::Vx, States::Phidot) = -x(States::Vy);
-
-    ans(States::Vy, States::Ay) = 1;
-    ans(States::Vy, States::Vx) = x(States::Phidot);
-    ans(States::Vy, States::Phidot) = x(States::Vx);
     return ans;
   }
 
-  StateVector xdot(StateVector x, InputVector) const {
-    StateVector ans;
-    ans(States::Vx) = x(States::Ax) - x(States::Phidot) * x(States::Vy);
-    ans(States::Vy) = x(States::Ay) + x(States::Phidot) * x(States::Vx);
-    return ans;
+  StateVector xdot(StateVector x, InputVector u) const {
+    return xdot_jacobian(x, u) * x;
   }
 };
 
@@ -75,15 +66,7 @@ struct IMUMeasurementModel {
 
   StateToMeasurementTfJacobian tf_state_to_measurement_jacobian(SystemModel::StateVector) const {
     StateToMeasurementTfJacobian ans(StateToMeasurementTfJacobian::Zero());
-
     ans(Fields::Ax, SystemModel::States::Ax) = 1;
-    ans(Fields::Ax, SystemModel::States::ImuAxBias) = -1;
-
-    ans(Fields::Ay, SystemModel::States::Ay) = 1;
-    ans(Fields::Ay, SystemModel::States::ImuAyBias) = -1;
-
-    ans(Fields::Phidot, SystemModel::States::Phidot) = 1;
-
     return ans;
   }
 

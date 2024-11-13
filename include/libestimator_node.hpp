@@ -1,1 +1,0 @@
-extern "C" int process(double qvx, double qvy, double qax, double qay, double qphidot, double qimuax, double qimuay);

@@ -7,14 +7,9 @@ namespace model {
 namespace states {
 enum States : int {
   Vx = 0,
-  Vy,
-  Phidot,
   Ax,
-  Ay,
-  ImuAxBias,
-  ImuAyBias
 };
-constexpr int Dimension = ImuAyBias + 1;
+constexpr int Dimension = Ax + 1;
 }; // namespace states
 
 namespace erpm_measurement {
@@ -27,10 +22,8 @@ constexpr int Dimension = ERPM + 1;
 namespace imu_measurement {
 enum Fields : int {
   Ax = 0,
-  Ay,
-  Phidot
 };
-constexpr int Dimension = Phidot + 1;
+constexpr int Dimension = Ax + 1;
 }; // namespace imu_measurement
 
 }; // namespace model
